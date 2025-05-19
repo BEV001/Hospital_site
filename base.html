@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>{% block title %}Медицинский портал{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    {% block head_scripts %}{% endblock %}
+</head>
+<body>
+<header>
+    <nav>
+        <a href="{{ url_for('map_view') }}">Карта</a> |
+        <a href="{{ url_for('table_view') }}">Таблица</a> |
+        {% if current_user.is_authenticated %}
+        <a href="{{ url_for('logout') }}">Выйти ({{ current_user.full_name or current_user.email }})</a>
+        {% else %}
+        <a href="{{ url_for('login') }}">Войти</a>
+        {% endif %}
+    </nav>
+</header>
+
+<main>
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+        <ul class="flashes">
+            {% for msg in messages %}
+                <li>{{ msg }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</main>
+
+<footer>
+    <small>&copy; 2025 Медицинский портал</small>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>
