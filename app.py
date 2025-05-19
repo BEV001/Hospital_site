@@ -1,7 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
-from flask_migrate import Migrate  # <-- добавьте импорт
+from flask_migrate import Migrate
 from models import db, User, Hospital, Region
 from config import Config
 from werkzeug.security import generate_password_hash
@@ -11,16 +11,15 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 db.init_app(app)
-migrate = Migrate(app, db)  # <-- инициализация миграций здесь
+migrate = Migrate(app, db)
 
 login_manager = LoginManager()
 login_manager.login_view = 'login'
 login_manager.init_app(app)
 
-# Загрузчик пользователя
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 # Роуты
 
@@ -73,10 +72,36 @@ def map_view():
 def table_view():
     return render_template('table.html')
 
+@app.route('/api/hospitals/<int:hospital_id>', methods=['GET'])
+@login_required
+def get_hospital(hospital_id):
+    hospital = Hospital.query.get_or_404(hospital_id)
+    return jsonify({
+        'id': hospital.id,
+        'name': hospital.name,
+        'country': hospital.country,
+        'region': hospital.region,
+        'city': hospital.city,
+        'street_type': hospital.street_type,
+        'street_name': hospital.street_name,
+        'house': hospital.house,
+        'building': hospital.building,
+        'address_full': hospital.address_full,
+        'latitude': hospital.latitude,
+        'longitude': hospital.longitude,
+        'license_lu': hospital.license_lu,
+        'hot_beds': hospital.hot_beds,
+        'quotas_vmp_2025': hospital.quotas_vmp_2025,
+        'contact_full_name': hospital.contact_full_name,
+        'contact_position': hospital.contact_position,
+        'contact_phone': hospital.contact_phone,
+        'contact_email': hospital.contact_email,
+        'image': hospital.image_filename,
+    })
+
 @app.route('/api/hospitals', methods=['GET'])
 @login_required
 def get_hospitals():
-    # Получение фильтров из запросов
     region_filter = request.args.get('region')
     city_filter = request.args.get('city')
     license_filter = request.args.get('license_lu')
@@ -85,11 +110,10 @@ def get_hospitals():
 
     query = Hospital.query
 
-    # Применяем фильтры
     if region_filter:
-        # Нужно связать с регионом, если есть связь в модели
-        # Упрощенно - фильтрация по городу
-        query = query.filter(Hospital.city == city_filter) if city_filter else query
+        query = query.filter(Hospital.region == region_filter)
+    if city_filter:
+        query = query.filter(Hospital.city == city_filter)
 
     if license_filter in ['true', 'false']:
         query = query.filter(Hospital.license_lu == (license_filter == 'true'))
@@ -123,16 +147,22 @@ def get_hospitals():
 @login_required
 def add_hospital():
     data = request.json
-    # Валидация данных пропущена для краткости
+    # Минимальная валидация
+    if not data.get('name') or not data.get('city'):
+        return jsonify({'error': 'Отсутствуют обязательные поля'}), 400
+
     hospital = Hospital(
         name=data['name'],
         country=data.get('country', 'Россия'),
+        region=data.get('region'),
         city=data['city'],
         street_type=data['street_type'],
         street_name=data['street_name'],
-        address_full=data['address_full'],
-        latitude=data['latitude'],
-        longitude=data['longitude'],
+        house=data.get('house'),
+        building=data.get('building'),
+        address_full=data.get('address_full'),
+        latitude=data.get('latitude'),
+        longitude=data.get('longitude'),
         license_lu=data.get('license_lu', False),
         hot_beds=data.get('hot_beds', False),
         quotas_vmp_2025=data.get('quotas_vmp_2025', False),
@@ -151,23 +181,31 @@ def add_hospital():
 def edit_hospital(hospital_id):
     hospital = Hospital.query.get_or_404(hospital_id)
     data = request.json
-    # Обновляем поля
+
     hospital.name = data.get('name', hospital.name)
+    hospital.country = data.get('country', hospital.country)
+    hospital.region = data.get('region', hospital.region)
     hospital.city = data.get('city', hospital.city)
     hospital.street_type = data.get('street_type', hospital.street_type)
     hospital.street_name = data.get('street_name', hospital.street_name)
+    hospital.house = data.get('house', hospital.house)
+    hospital.building = data.get('building', hospital.building)
     hospital.address_full = data.get('address_full', hospital.address_full)
     hospital.latitude = data.get('latitude', hospital.latitude)
     hospital.longitude = data.get('longitude', hospital.longitude)
     hospital.license_lu = data.get('license_lu', hospital.license_lu)
     hospital.hot_beds = data.get('hot_beds', hospital.hot_beds)
     hospital.quotas_vmp_2025 = data.get('quotas_vmp_2025', hospital.quotas_vmp_2025)
+
     contact = data.get('contact', {})
     hospital.contact_full_name = contact.get('full_name', hospital.contact_full_name)
     hospital.contact_position = contact.get('position', hospital.contact_position)
     hospital.contact_phone = contact.get('phone', hospital.contact_phone)
     hospital.contact_email = contact.get('email', hospital.contact_email)
-    # image_filename можно обновить аналогично
+
+    if 'image' in data:
+        hospital.image_filename = data.get('image', hospital.image_filename)
+
     db.session.commit()
     return jsonify({'status': 'success'})
 
