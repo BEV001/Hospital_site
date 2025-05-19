@@ -36,9 +36,12 @@ class Hospital(db.Model):
     name = db.Column(db.String(200), nullable=False)
     image_filename = db.Column(db.String(200))
     country = db.Column(db.String(50), default='Россия')
+    region = db.Column(db.String(100))   
     city = db.Column(db.String(100))
     street_type = db.Column(db.String(50))  # шоссе, бульвар и т.д.
     street_name = db.Column(db.String(200))
+    house = db.Column(db.String(50))          
+    building = db.Column(db.String(50))     
     address_full = db.Column(db.String(300))  # полный адрес для удобства
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
