@@ -19,6 +19,10 @@ th {
   background: rgba(0,0,0,0.5);
   z-index: 9999;
 }
+#hotBedsCountContainer {
+  margin-left: 20px;
+  margin-bottom: 10px;
+}
 </style>
 {% endblock %}
 {% block content %}
@@ -51,9 +55,13 @@ th {
             <th>Адрес</th>
             <th>Лицензия ЛУ</th>
             <th>Горячие койки</th>
+            <th>Число горячих коек</th>
             <th>Квоты ВМП 2025</th>
+            <th>План Lu 2025</th>
+            <th>Продано (итого)</th>
+            <th>Остаток</th>
             <th>Контакт</th>
-            <th>Телефон</th>
+            <th>Телефон</th>ы
             <th>Email</th>
             <th>Действия</th>
         </tr>
@@ -78,6 +86,15 @@ th {
 function openModal(contentHtml) {
     $('#modalBody').html(contentHtml);
     $('#modalContainer').show();
+    // Навесим обработчик для переключения видимости поля количества горячих коек
+    $('#chkHotBeds').off('change').on('change', function() {
+        if ($(this).is(':checked')) {
+            $('#hotBedsCountContainer').show();
+        } else {
+            $('#hotBedsCountContainer').hide();
+            $('#hotBedsCountContainer input[name="hot_beds_count"]').val(0);
+        }
+    });
 }
 
 function closeModal() {
@@ -117,6 +134,7 @@ function renderHospitalForm(hospital = {}) {
       <option value="шоссе" ${hospital.street_type === 'шоссе' ? 'selected' : ''}>шоссе</option>
       <option value="бульвар" ${hospital.street_type === 'бульвар' ? 'selected' : ''}>бульвар</option>
       <option value="улица" ${hospital.street_type === 'улица' ? 'selected' : ''}>улица</option>
+      <option value="площадь" ${hospital.street_type === 'площадь' ? 'selected' : ''}>площадь</option>
       <option value="проспект" ${hospital.street_type === 'проспект' ? 'selected' : ''}>проспект</option>
       <option value="переулок" ${hospital.street_type === 'переулок' ? 'selected' : ''}>переулок</option>
       <option value="набережная" ${hospital.street_type === 'набережная' ? 'selected' : ''}>набережная</option>
@@ -135,18 +153,37 @@ function renderHospitalForm(hospital = {}) {
     <input type="text" name="building" value="${hospital.building || ''}">
   </label><br>
 
-  <!-- Координаты (скрытые) -->
-  <input type="hidden" name="latitude" value="${hospital.latitude || ''}">
-  <input type="hidden" name="longitude" value="${hospital.longitude || ''}">
+  <label>Широта:<br>
+    <input type="text" name="latitude" value="${hospital.latitude || ''}" pattern="^-?\\d+(\\.\\d+)?$" title="Введите корректное число" required>
+  </label><br>
+
+  <label>Долгота:<br>
+    <input type="text" name="longitude" value="${hospital.longitude || ''}" pattern="^-?\\d+(\\.\\d+)?$" title="Введите корректное число" required>
+  </label><br>
 
   <label>Загрузить изображение:<br>
     <input type="file" name="image" accept="image/*">
   </label><br>
 
   <label><input type="checkbox" name="license_lu" ${hospital.license_lu ? 'checked' : ''}> Лицензия Lu</label><br>
-  <label><input type="checkbox" name="hot_beds" ${hospital.hot_beds ? 'checked' : ''}> Горячие койки</label><br>
+
+  <label><input type="checkbox" name="hot_beds" id="chkHotBeds" ${hospital.hot_beds ? 'checked' : ''}> Горячие койки</label><br>
+
+  <div id="hotBedsCountContainer" style="display: ${hospital.hot_beds ? 'block' : 'none'};">
+    <label>Число горячих коек:<br>
+      <input type="number" name="hot_beds_count" min="0" value="${hospital.hot_beds_count != null ? hospital.hot_beds_count : 0}">
+    </label><br>
+  </div>
+
   <label><input type="checkbox" name="quotas_vmp_2025" ${hospital.quotas_vmp_2025 ? 'checked' : ''}> Квоты ВМП 2025</label><br>
 
+  <label>План Lu 2025:<br>
+    <input type="number" name="plan_lu_2025" min="0" value="${hospital.plan_lu_2025 != null ? hospital.plan_lu_2025 : 0}">
+  </label><br>
+
+  <label>Продажи по месяцам (JSON):<br>
+    <textarea name="sales_lu_2025" rows="4" placeholder='{"2024-01": 5, "2024-02": 8}'>${hospital.sales_lu_2025 ? JSON.stringify(hospital.sales_lu_2025, null, 2) : ''}</textarea>
+  </label><br>
   <fieldset>
     <legend>Контактная информация</legend>
     <label>ФИО:<br>
@@ -176,17 +213,36 @@ function fetchHospitals(filters = {}) {
         const tbody = $('#hospitalsTable tbody');
         tbody.empty();
         data.forEach(hospital => {
+            const hotBedsDisplay = hospital.hot_beds 
+                ? 'Да' 
+                : 'Нет';
+
+            const hotBedsCountDisplay = hospital.hot_beds 
+                ? (hospital.hot_beds_count != null ? hospital.hot_beds_count : '0') 
+                : '-';
+
+            const planLu2025 = hospital.plan_lu_2025 != null ? hospital.plan_lu_2025 : 0;
+
+            const salesLu2025 = hospital.sales_lu_2025 || {};
+            const totalSold = Object.values(salesLu2025).reduce((a,b) => a + b, 0);
+
+            const remainder = planLu2025 - totalSold;
+
             const row = $(`
                 <tr>
-                    <td>${hospital.name}</td>
-                    <td>${hospital.city}</td>
-                    <td>${hospital.address}</td>
-                    <td>${hospital.license_lu ? 'Да' : 'Нет'}</td>
-                    <td>${hospital.hot_beds ? 'Да' : 'Нет'}</td>
-                    <td>${hospital.quotas_vmp_2025 ? 'Да' : 'Нет'}</td>
-                    <td>${hospital.contact_full_name}</td>
-                    <td>${hospital.contact_phone}</td>
-                    <td>${hospital.contact_email}</td>
+                    <td>${hospital.name}</td>                            <!-- Название -->
+                    <td>${hospital.city}</td>                            <!-- Город -->
+                    <td>${hospital.address || ''}</td>                   <!-- Адрес -->
+                    <td>${hospital.license_lu ? 'Да' : 'Нет'}</td>      <!-- Лицензия ЛУ -->
+                    <td>${hotBedsDisplay}</td>                            <!-- Горячие койки -->
+                    <td>${hotBedsCountDisplay}</td>                       <!-- Число горячих коек -->
+                    <td>${hospital.quotas_vmp_2025 ? 'Да' : 'Нет'}</td>  <!-- Квоты ВМП 2025 -->
+                    <td>${planLu2025}</td>                                <!-- План Lu 2025 -->
+                    <td>${totalSold}</td>                                 <!-- Продано (итого) -->
+                    <td>${remainder >= 0 ? remainder : 0}</td>           <!-- Остаток -->
+                    <td>${hospital.contact_full_name || ''}</td>         <!-- Контакт -->
+                    <td>${hospital.contact_phone || ''}</td>             <!-- Телефон -->
+                    <td>${hospital.contact_email || ''}</td>             <!-- Email -->
                     <td>
                         <button class="editBtn" data-id="${hospital.id}">Редактировать</button>
                     </td>
@@ -250,8 +306,29 @@ $('#modalContainer').on('submit', '#hospitalForm', function(e) {
     const hotBeds = formData.has('hot_beds');
     const quotasVmp2025 = formData.has('quotas_vmp_2025');
 
+    // Обработка количества горячих коек
+    let hotBedsCountRaw = formData.get('hot_beds_count');
+    let hotBedsCount = 0;
+    if (hotBeds && hotBedsCountRaw) {
+        hotBedsCount = parseInt(hotBedsCountRaw, 10);
+        if (isNaN(hotBedsCount) || hotBedsCount < 0) hotBedsCount = 0;
+    }
+
+    const planLu2025Raw = formData.get('plan_lu_2025');
+    const planLu2025 = planLu2025Raw ? parseInt(planLu2025Raw, 10) : 0;
+
+    let salesLu2025Raw = formData.get('sales_lu_2025');
+    let salesLu2025 = {};
+    if (salesLu2025Raw) {
+      try {
+        salesLu2025 = JSON.parse(salesLu2025Raw);
+      } catch(e) {
+        alert('Неверный формат JSON в поле продаж по месяцам');
+        return;
+      }
+    }
+
     // Обработка файла (пока не загружаем, просто игнорируем - можно реализовать отдельно)
-    // Для demo передаем null
     const image = null;
 
     const data = {
@@ -268,14 +345,16 @@ $('#modalContainer').on('submit', '#hospitalForm', function(e) {
         longitude: longitude,
         license_lu: licenseLu,
         hot_beds: hotBeds,
+        hot_beds_count: hotBedsCount,
         quotas_vmp_2025: quotasVmp2025,
-        contact: {
-            full_name: formData.get('contact_full_name'),
-            position: formData.get('contact_position'),
-            phone: formData.get('contact_phone'),
-            email: formData.get('contact_email')
-        },
-        image: image
+        contact_full_name: formData.get('contact_full_name'),
+        contact_position: formData.get('contact_position'),
+        contact_phone: formData.get('contact_phone'),
+        contact_email: formData.get('contact_email'),
+        image: image,
+
+        plan_lu_2025: planLu2025,
+        sales_lu_2025: salesLu2025
     };
 
     if (!id) {
