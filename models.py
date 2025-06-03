@@ -47,7 +47,10 @@ class Hospital(db.Model):
     longitude = db.Column(db.Float)
     license_lu = db.Column(db.Boolean, default=False)
     hot_beds = db.Column(db.Boolean, default=False)
+    hot_beds_count = db.Column(db.Integer, default=0) 
     quotas_vmp_2025 = db.Column(db.Boolean, default=False)
+    plan_lu_2025 = db.Column(db.Integer, default=0)
+    sales_lu_2025 = db.Column(db.JSON, default={}) 
 
     # Контактные данные (один контакт для простоты)
     contact_full_name = db.Column(db.String(150))
