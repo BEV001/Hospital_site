@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Карта больниц{% endblock %}
+{% block title %}Карта центров ядерной медицины{% endblock %}
 {% block head_scripts %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <style>
@@ -7,6 +7,7 @@
   form.filters { margin-bottom: 10px; }
   .filter-checkbox { margin-right: 15px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 {% endblock %}
 {% block content %}
 <h1>Карта больниц</h1>
@@ -35,7 +36,7 @@
 {% block scripts %}
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const map = L.map('map').setView([55.75, 37.62], 5); // Москва центр
+const map = L.map('map').setView([55.751244, 37.618423], 5); // Центр — Москва
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors'
@@ -46,42 +47,124 @@ let markersGroup = L.layerGroup().addTo(map);
 function loadHospitals(filters = {}) {
     let params = new URLSearchParams(filters);
     fetch('/api/hospitals?' + params.toString())
-      .then(res => res.json())
-      .then(data => {
-          markersGroup.clearLayers();
-          data.forEach(hospital => {
-              if (!hospital.latitude || !hospital.longitude) return;
-              const marker = L.marker([hospital.latitude, hospital.longitude]);
-              let popupContent = `<strong>${hospital.name}</strong><br>
-                ${hospital.city}, ${hospital.address}<br>
-                Лицензия ЛУ: ${hospital.license_lu ? 'Да' : 'Нет'}<br>
-                Горячие койки: ${hospital.hot_beds ? 'Да' : 'Нет'}<br>
-                Квоты ВМП 2025: ${hospital.quotas_vmp_2025 ? 'Да' : 'Нет'}<br>
-                Контакт: ${hospital.contact_full_name}<br>
-                Телефон: ${hospital.contact_phone}<br>
-                Email: ${hospital.contact_email}
-              `;
-              marker.bindPopup(popupContent);
-              markersGroup.addLayer(marker);
-          });
-      });
+        .then(response => response.json())
+        .then(data => {
+            markersGroup.clearLayers();
+            if (!data.length) {
+                // Можно добавить сообщение, что больницы не найдены
+                return;
+            }
+            data.forEach(hospital => {
+                if (!hospital.latitude || !hospital.longitude) return;
+
+                const marker = L.marker([hospital.latitude, hospital.longitude]);
+
+                const plan = hospital.plan_lu_2025 || 0;
+                const sales = hospital.sales_lu_2025 || {};
+                const months = Object.keys(sales).sort();
+                const salesValues = months.map(m => sales[m]);
+                const totalSold = salesValues.reduce((a,b) => a+b, 0);
+                const remainder = plan - totalSold;
+
+                const popupId = `popup-chart-${hospital.id}`;
+
+                let hotBedsInfo = hospital.hot_beds 
+                    ? `Да${hospital.hot_beds_count && hospital.hot_beds_count > 0 ? ', ' + hospital.hot_beds_count : ''}` 
+                    : 'Нет';
+
+                const popupContent = `
+                    <strong>${hospital.name}</strong><br>
+                    ${hospital.city}, ${hospital.address}<br>
+                    Лицензия ЛУ: ${hospital.license_lu ? 'Да' : 'Нет'}<br>
+                    Горячие койки: ${hotBedsInfo}<br>
+                    Квоты ВМП 2025: ${hospital.quotas_vmp_2025 ? 'Да' : 'Нет'}<br>
+                    Контакт: ${hospital.contact_full_name || ''}<br>
+                    Телефон: ${hospital.contact_phone || ''}<br>
+                    Email: ${hospital.contact_email || ''}<br><br>
+
+                    <div><strong>План Lu 2025:</strong> ${plan}</div>
+                    <div><strong>Продано (итого):</strong> ${totalSold}</div>
+                    <div><strong>Остаток:</strong> ${remainder >= 0 ? remainder : 0}</div>
+
+                    <canvas id="${popupId}" width="300" height="150"></canvas>
+                `;
+
+                marker.bindPopup(popupContent);
+
+                marker.on('popupopen', () => {
+                    const ctx = document.getElementById(popupId)?.getContext('2d');
+
+                    if (!ctx) return;
+
+                    if (window[popupId + '_chart']) {
+                        window[popupId + '_chart'].destroy();
+                    }
+
+                    let labels = months.length ? months : [new Date().toISOString().slice(0,7)];
+                    let dataValues = labels.map(m => sales[m] || 0);
+
+                    window[popupId + '_chart'] = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Продажи Lu 2025',
+                                data: dataValues,
+                                backgroundColor: 'rgba(54, 162, 235, 0.7)'
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    suggestedMax: Math.max(...dataValues, plan)
+                                }
+                            },
+                            plugins: {
+                                legend: {
+                                    display: true
+                                },
+                                tooltip: {
+                                    callbacks: {
+                                        label: context => `${context.parsed.y} продано`
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+
+                markersGroup.addLayer(marker);
+            });
+        })
+        .catch(err => {
+            console.error('Ошибка загрузки данных:', err);
+        });
 }
 
-document.getElementById('filterForm').addEventListener('submit', ev => {
-    ev.preventDefault();
-    const formData = new FormData(ev.target);
+document.getElementById('filterForm').addEventListener('submit', event => {
+    event.preventDefault();
+    const formData = new FormData(event.target);
     const filters = {};
-    for (const [key, value] of formData.entries()) {
-        if (key === 'license_lu' || key === 'hot_beds' || key === 'quotas_vmp_2025') {
-            filters[key] = 'true';
-        } else if (value.trim() !== '') {
-            filters[key] = value;
+
+    // Для чекбоксов передаем 'true' если отмечены, иначе не отправляем
+    ['license_lu', 'hot_beds', 'quotas_vmp_2025'].forEach(name => {
+        const checkbox = event.target.querySelector(`input[name="${name}"]`);
+        if (checkbox && checkbox.checked) {
+            filters[name] = 'true';
         }
+    });
+
+    // Текстовые поля
+    const city = formData.get('city').trim();
+    if (city) {
+        filters['city'] = city;
     }
+
     loadHospitals(filters);
 });
 
-// Загрузка данных при старте
+// Загрузить все при инициализации
 loadHospitals();
 </script>
 {% endblock %}
