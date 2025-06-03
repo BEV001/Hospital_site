@@ -1,213 +1,401 @@
-from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, session
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user
-from flask_migrate import Migrate
-from models import db, User, Hospital, Region
-from config import Config
-from werkzeug.security import generate_password_hash
-import json
+{% extends "base.html" %}
+{% block title %}Таблица центров ядерной медицины{% endblock %}
+{% block head_scripts %}
+<style>
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th, td {
+  padding: 8px;
+  border: 1px solid #ddd;
+}
+th {
+  background-color: #f0f0f0;
+}
+#modalContainer {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 9999;
+}
+#hotBedsCountContainer {
+  margin-left: 20px;
+  margin-bottom: 10px;
+}
+</style>
+{% endblock %}
+{% block content %}
+<h1>Таблица больниц</h1>
 
-app = Flask(__name__)
-app.config.from_object(Config)
+<form id="filterForm">
+    <label>Город:
+        <input type="text" name="city" id="cityFilter" placeholder="Введите город" />
+    </label>
 
-db.init_app(app)
-migrate = Migrate(app, db)
+    <label>
+        <input type="checkbox" name="license_lu" value="true" /> Лицензия ЛУ
+    </label>
+    <label>
+        <input type="checkbox" name="hot_beds" value="true" /> Горячие койки
+    </label>
+    <label>
+        <input type="checkbox" name="quotas_vmp_2025" value="true" /> Квоты ВМП 2025
+    </label>
 
-login_manager = LoginManager()
-login_manager.login_view = 'login'
-login_manager.init_app(app)
+    <button type="submit">Применить фильтры</button>
+    <button type="button" id="btnAddHospital">Добавить больницу</button>
+</form>
 
-@login_manager.user_loader
-def load_user(user_id):
-    return db.session.get(User, int(user_id))
+<table id="hospitalsTable">
+    <thead>
+        <tr>
+            <th>Название</th>
+            <th>Город</th>
+            <th>Адрес</th>
+            <th>Лицензия ЛУ</th>
+            <th>Горячие койки</th>
+            <th>Число горячих коек</th>
+            <th>Квоты ВМП 2025</th>
+            <th>План Lu 2025</th>
+            <th>Продано (итого)</th>
+            <th>Остаток</th>
+            <th>Контакт</th>
+            <th>Телефон</th>ы
+            <th>Email</th>
+            <th>Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+    <!-- Данные подгружаются JS -->
+    </tbody>
+</table>
 
-# Роуты
+<!-- Модальное окно для добавления и редактирования -->
+<div id="modalContainer" style="display:none;">
+    <div id="modalContent" style="background:#fff; padding:20px; border:1px solid #ccc; max-width:600px; margin:40px auto; position:relative;">
+        <button id="modalClose" style="position:absolute; top:10px; right:10px;">X</button>
+        <div id="modalBody"></div>
+    </div>
+</div>
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
-        user = User.query.filter_by(email=email).first()
-        if user and user.check_password(password):
-            login_user(user)
-            # Проверка смены пароля (если пароль == '123')
-            if password == '123':
-                return redirect(url_for('change_password'))
-            return redirect(url_for('map_view'))
-        else:
-            flash('Неверный логин или пароль')
-    return render_template('login.html')
+{% endblock %}
 
-@app.route('/change_password', methods=['GET', 'POST'])
-@login_required
-def change_password():
-    if request.method == 'POST':
-        new_password = request.form.get('new_password')
-        confirm_password = request.form.get('confirm_password')
-        if new_password != confirm_password:
-            flash('Пароли не совпадают')
-        elif len(new_password) < 6:
-            flash('Пароль должен быть не менее 6 символов')
-        else:
-            current_user.set_password(new_password)
-            db.session.commit()
-            flash('Пароль успешно изменен')
-            return redirect(url_for('map_view'))
-    return render_template('change_password.html')
+{% block scripts %}
+<script>
+function openModal(contentHtml) {
+    $('#modalBody').html(contentHtml);
+    $('#modalContainer').show();
+    // Навесим обработчик для переключения видимости поля количества горячих коек
+    $('#chkHotBeds').off('change').on('change', function() {
+        if ($(this).is(':checked')) {
+            $('#hotBedsCountContainer').show();
+        } else {
+            $('#hotBedsCountContainer').hide();
+            $('#hotBedsCountContainer input[name="hot_beds_count"]').val(0);
+        }
+    });
+}
 
-@app.route('/logout')
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for('login'))
+function closeModal() {
+    $('#modalContainer').hide();
+    $('#modalBody').html('');
+}
 
-@app.route('/')
-@login_required
-def map_view():
-    return render_template('map.html')
+$('#modalClose').on('click', closeModal);
 
-@app.route('/table')
-@login_required
-def table_view():
-    return render_template('table.html')
+$('#btnAddHospital').on('click', function() {
+    openModal(renderHospitalForm());
+});
 
-@app.route('/api/hospitals/<int:hospital_id>', methods=['GET'])
-@login_required
-def get_hospital(hospital_id):
-    hospital = Hospital.query.get_or_404(hospital_id)
-    return jsonify({
-        'id': hospital.id,
-        'name': hospital.name,
-        'country': hospital.country,
-        'region': hospital.region,
-        'city': hospital.city,
-        'street_type': hospital.street_type,
-        'street_name': hospital.street_name,
-        'house': hospital.house,
-        'building': hospital.building,
-        'address_full': hospital.address_full,
-        'latitude': hospital.latitude,
-        'longitude': hospital.longitude,
-        'license_lu': hospital.license_lu,
-        'hot_beds': hospital.hot_beds,
-        'quotas_vmp_2025': hospital.quotas_vmp_2025,
-        'contact_full_name': hospital.contact_full_name,
-        'contact_position': hospital.contact_position,
-        'contact_phone': hospital.contact_phone,
-        'contact_email': hospital.contact_email,
-        'image': hospital.image_filename,
+function renderHospitalForm(hospital = {}) {
+    return `
+<form id="hospitalForm" enctype="multipart/form-data">
+  <input type="hidden" name="id" value="${hospital.id || ''}">
+
+  <label>Название:<br>
+    <input type="text" name="name" value="${hospital.name || ''}" required>
+  </label><br>
+
+  <label>Страна:<br>
+    <input type="text" name="country" value="${hospital.country || 'Россия'}" readonly>
+  </label><br>
+
+  <label>Область:<br>
+    <input type="text" name="region" value="${hospital.region || ''}" required>
+  </label><br>
+
+  <label>Город:<br>
+    <input type="text" name="city" value="${hospital.city || ''}" required>
+  </label><br>
+
+  <label>Тип улицы:<br>
+    <select name="street_type" required>
+      <option value="шоссе" ${hospital.street_type === 'шоссе' ? 'selected' : ''}>шоссе</option>
+      <option value="бульвар" ${hospital.street_type === 'бульвар' ? 'selected' : ''}>бульвар</option>
+      <option value="улица" ${hospital.street_type === 'улица' ? 'selected' : ''}>улица</option>
+      <option value="площадь" ${hospital.street_type === 'площадь' ? 'selected' : ''}>площадь</option>
+      <option value="проспект" ${hospital.street_type === 'проспект' ? 'selected' : ''}>проспект</option>
+      <option value="переулок" ${hospital.street_type === 'переулок' ? 'selected' : ''}>переулок</option>
+      <option value="набережная" ${hospital.street_type === 'набережная' ? 'selected' : ''}>набережная</option>
+    </select>
+  </label><br>
+
+  <label>Улица:<br>
+    <input type="text" name="street_name" value="${hospital.street_name || ''}" required>
+  </label><br>
+
+  <label>Дом:<br>
+    <input type="text" name="house" value="${hospital.house || ''}" required>
+  </label><br>
+
+  <label>Корпус/строение:<br>
+    <input type="text" name="building" value="${hospital.building || ''}">
+  </label><br>
+
+  <label>Широта:<br>
+    <input type="text" name="latitude" value="${hospital.latitude || ''}" pattern="^-?\\d+(\\.\\d+)?$" title="Введите корректное число" required>
+  </label><br>
+
+  <label>Долгота:<br>
+    <input type="text" name="longitude" value="${hospital.longitude || ''}" pattern="^-?\\d+(\\.\\d+)?$" title="Введите корректное число" required>
+  </label><br>
+
+  <label>Загрузить изображение:<br>
+    <input type="file" name="image" accept="image/*">
+  </label><br>
+
+  <label><input type="checkbox" name="license_lu" ${hospital.license_lu ? 'checked' : ''}> Лицензия Lu</label><br>
+
+  <label><input type="checkbox" name="hot_beds" id="chkHotBeds" ${hospital.hot_beds ? 'checked' : ''}> Горячие койки</label><br>
+
+  <div id="hotBedsCountContainer" style="display: ${hospital.hot_beds ? 'block' : 'none'};">
+    <label>Число горячих коек:<br>
+      <input type="number" name="hot_beds_count" min="0" value="${hospital.hot_beds_count != null ? hospital.hot_beds_count : 0}">
+    </label><br>
+  </div>
+
+  <label><input type="checkbox" name="quotas_vmp_2025" ${hospital.quotas_vmp_2025 ? 'checked' : ''}> Квоты ВМП 2025</label><br>
+
+  <label>План Lu 2025:<br>
+    <input type="number" name="plan_lu_2025" min="0" value="${hospital.plan_lu_2025 != null ? hospital.plan_lu_2025 : 0}">
+  </label><br>
+
+  <label>Продажи по месяцам (JSON):<br>
+    <textarea name="sales_lu_2025" rows="4" placeholder='{"2024-01": 5, "2024-02": 8}'>${hospital.sales_lu_2025 ? JSON.stringify(hospital.sales_lu_2025, null, 2) : ''}</textarea>
+  </label><br>
+  <fieldset>
+    <legend>Контактная информация</legend>
+    <label>ФИО:<br>
+      <input type="text" name="contact_full_name" value="${hospital.contact_full_name || ''}">
+    </label><br>
+    <label>Должность:<br>
+      <input type="text" name="contact_position" value="${hospital.contact_position || ''}">
+    </label><br>
+    <label>Телефон:<br>
+      <input type="text" name="contact_phone" value="${hospital.contact_phone || ''}">
+    </label><br>
+    <label>Email:<br>
+      <input type="email" name="contact_email" value="${hospital.contact_email || ''}">
+    </label><br>
+  </fieldset>
+
+  <button type="submit">Сохранить</button>
+</form>
+    `;
+}
+
+function fetchHospitals(filters = {}) {
+    let params = new URLSearchParams(filters);
+    fetch('/api/hospitals?' + params.toString())
+    .then(res => res.json())
+    .then(data => {
+        const tbody = $('#hospitalsTable tbody');
+        tbody.empty();
+        data.forEach(hospital => {
+            const hotBedsDisplay = hospital.hot_beds 
+                ? 'Да' 
+                : 'Нет';
+
+            const hotBedsCountDisplay = hospital.hot_beds 
+                ? (hospital.hot_beds_count != null ? hospital.hot_beds_count : '0') 
+                : '-';
+
+            const planLu2025 = hospital.plan_lu_2025 != null ? hospital.plan_lu_2025 : 0;
+
+            const salesLu2025 = hospital.sales_lu_2025 || {};
+            const totalSold = Object.values(salesLu2025).reduce((a,b) => a + b, 0);
+
+            const remainder = planLu2025 - totalSold;
+
+            const row = $(`
+                <tr>
+                    <td>${hospital.name}</td>                            <!-- Название -->
+                    <td>${hospital.city}</td>                            <!-- Город -->
+                    <td>${hospital.address || ''}</td>                   <!-- Адрес -->
+                    <td>${hospital.license_lu ? 'Да' : 'Нет'}</td>      <!-- Лицензия ЛУ -->
+                    <td>${hotBedsDisplay}</td>                            <!-- Горячие койки -->
+                    <td>${hotBedsCountDisplay}</td>                       <!-- Число горячих коек -->
+                    <td>${hospital.quotas_vmp_2025 ? 'Да' : 'Нет'}</td>  <!-- Квоты ВМП 2025 -->
+                    <td>${planLu2025}</td>                                <!-- План Lu 2025 -->
+                    <td>${totalSold}</td>                                 <!-- Продано (итого) -->
+                    <td>${remainder >= 0 ? remainder : 0}</td>           <!-- Остаток -->
+                    <td>${hospital.contact_full_name || ''}</td>         <!-- Контакт -->
+                    <td>${hospital.contact_phone || ''}</td>             <!-- Телефон -->
+                    <td>${hospital.contact_email || ''}</td>             <!-- Email -->
+                    <td>
+                        <button class="editBtn" data-id="${hospital.id}">Редактировать</button>
+                    </td>
+                </tr>
+            `);
+            tbody.append(row);
+        });
+    });
+}
+
+$('#filterForm').on('submit', function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    const filters = {};
+    for (const [key, value] of formData.entries()) {
+        if (key === 'license_lu' || key === 'hot_beds' || key === 'quotas_vmp_2025') {
+            filters[key] = 'true';
+        } else if (value.trim() !== '') {
+            filters[key] = value;
+        }
+    }
+    fetchHospitals(filters);
+});
+
+// Обработка клика на редактирование
+$('#hospitalsTable').on('click', '.editBtn', function() {
+    const id = $(this).data('id');
+    fetch(`/api/hospitals/${id}`)
+    .then(res => {
+        if (!res.ok) throw new Error('Больница не найдена');
+        return res.json();
     })
+    .then(hosp => {
+        openModal(renderHospitalForm(hosp));
+    })
+    .catch(err => alert(err.message));
+});
 
-@app.route('/api/hospitals', methods=['GET'])
-@login_required
-def get_hospitals():
-    region_filter = request.args.get('region')
-    city_filter = request.args.get('city')
-    license_filter = request.args.get('license_lu')
-    hot_beds_filter = request.args.get('hot_beds')
-    quotas_filter = request.args.get('quotas_vmp_2025')
+// Обработка отправки формы добавления/редактирования
+$('#modalContainer').on('submit', '#hospitalForm', function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
 
-    query = Hospital.query
+    const streetType = formData.get('street_type');
+    const streetName = formData.get('street_name');
+    const house = formData.get('house');
+    const building = formData.get('building');
 
-    if region_filter:
-        query = query.filter(Hospital.region == region_filter)
-    if city_filter:
-        query = query.filter(Hospital.city == city_filter)
+    const addressFull = `${streetType} ${streetName}, д. ${house}` + (building ? `, корп. ${building}` : '');
 
-    if license_filter in ['true', 'false']:
-        query = query.filter(Hospital.license_lu == (license_filter == 'true'))
-    if hot_beds_filter in ['true', 'false']:
-        query = query.filter(Hospital.hot_beds == (hot_beds_filter == 'true'))
-    if quotas_filter in ['true', 'false']:
-        query = query.filter(Hospital.quotas_vmp_2025 == (quotas_filter == 'true'))
+    const id = formData.get('id');
 
-    hospitals = query.all()
-    result = []
-    for h in hospitals:
-        result.append({
-            'id': h.id,
-            'name': h.name,
-            'latitude': h.latitude,
-            'longitude': h.longitude,
-            'city': h.city,
-            'address': h.address_full,
-            'license_lu': h.license_lu,
-            'hot_beds': h.hot_beds,
-            'quotas_vmp_2025': h.quotas_vmp_2025,
-            'contact_full_name': h.contact_full_name,
-            'contact_position': h.contact_position,
-            'contact_phone': h.contact_phone,
-            'contact_email': h.contact_email,
-            'image': h.image_filename,
+    // Для координат парсим float, если пусто - ставим null
+    const latitudeRaw = formData.get('latitude');
+    const longitudeRaw = formData.get('longitude');
+    const latitude = latitudeRaw ? parseFloat(latitudeRaw) : null;
+    const longitude = longitudeRaw ? parseFloat(longitudeRaw) : null;
+
+    // Обработка чекбоксов
+    const licenseLu = formData.has('license_lu');
+    const hotBeds = formData.has('hot_beds');
+    const quotasVmp2025 = formData.has('quotas_vmp_2025');
+
+    // Обработка количества горячих коек
+    let hotBedsCountRaw = formData.get('hot_beds_count');
+    let hotBedsCount = 0;
+    if (hotBeds && hotBedsCountRaw) {
+        hotBedsCount = parseInt(hotBedsCountRaw, 10);
+        if (isNaN(hotBedsCount) || hotBedsCount < 0) hotBedsCount = 0;
+    }
+
+    const planLu2025Raw = formData.get('plan_lu_2025');
+    const planLu2025 = planLu2025Raw ? parseInt(planLu2025Raw, 10) : 0;
+
+    let salesLu2025Raw = formData.get('sales_lu_2025');
+    let salesLu2025 = {};
+    if (salesLu2025Raw) {
+      try {
+        salesLu2025 = JSON.parse(salesLu2025Raw);
+      } catch(e) {
+        alert('Неверный формат JSON в поле продаж по месяцам');
+        return;
+      }
+    }
+
+    // Обработка файла (пока не загружаем, просто игнорируем - можно реализовать отдельно)
+    const image = null;
+
+    const data = {
+        name: formData.get('name'),
+        country: formData.get('country'),
+        region: formData.get('region'),
+        city: formData.get('city'),
+        street_type: streetType,
+        street_name: streetName,
+        house: house,
+        building: building,
+        address_full: addressFull,
+        latitude: latitude,
+        longitude: longitude,
+        license_lu: licenseLu,
+        hot_beds: hotBeds,
+        hot_beds_count: hotBedsCount,
+        quotas_vmp_2025: quotasVmp2025,
+        contact_full_name: formData.get('contact_full_name'),
+        contact_position: formData.get('contact_position'),
+        contact_phone: formData.get('contact_phone'),
+        contact_email: formData.get('contact_email'),
+        image: image,
+
+        plan_lu_2025: planLu2025,
+        sales_lu_2025: salesLu2025
+    };
+
+    if (!id) {
+        // Добавление
+        fetch('/api/hospitals', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
         })
-    return jsonify(result)
+        .then(res => {
+            if (res.status === 201) return res.json();
+            else throw new Error('Ошибка при добавлении');
+        })
+        .then(() => {
+            alert('Больница добавлена');
+            closeModal();
+            fetchHospitals();
+        })
+        .catch(err => alert(err.message));
+    } else {
+        // Редактирование
+        fetch(`/api/hospitals/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        })
+        .then(res => {
+            if (res.ok) return res.json();
+            else throw new Error('Ошибка при редактировании');
+        })
+        .then(() => {
+            alert('Больница обновлена');
+            closeModal();
+            fetchHospitals();
+        })
+        .catch(err => alert(err.message));
+    }
+});
 
-@app.route('/api/hospitals', methods=['POST'])
-@login_required
-def add_hospital():
-    data = request.json
-    # Минимальная валидация
-    if not data.get('name') or not data.get('city'):
-        return jsonify({'error': 'Отсутствуют обязательные поля'}), 400
+// Загрузка списка при старте
+fetchHospitals();
 
-    hospital = Hospital(
-        name=data['name'],
-        country=data.get('country', 'Россия'),
-        region=data.get('region'),
-        city=data['city'],
-        street_type=data['street_type'],
-        street_name=data['street_name'],
-        house=data.get('house'),
-        building=data.get('building'),
-        address_full=data.get('address_full'),
-        latitude=data.get('latitude'),
-        longitude=data.get('longitude'),
-        license_lu=data.get('license_lu', False),
-        hot_beds=data.get('hot_beds', False),
-        quotas_vmp_2025=data.get('quotas_vmp_2025', False),
-        contact_full_name=data['contact']['full_name'],
-        contact_position=data['contact']['position'],
-        contact_phone=data['contact']['phone'],
-        contact_email=data['contact']['email'],
-        image_filename=data.get('image')
-    )
-    db.session.add(hospital)
-    db.session.commit()
-    return jsonify({'status': 'success', 'id': hospital.id}), 201
-
-@app.route('/api/hospitals/<int:hospital_id>', methods=['PUT'])
-@login_required
-def edit_hospital(hospital_id):
-    hospital = Hospital.query.get_or_404(hospital_id)
-    data = request.json
-
-    hospital.name = data.get('name', hospital.name)
-    hospital.country = data.get('country', hospital.country)
-    hospital.region = data.get('region', hospital.region)
-    hospital.city = data.get('city', hospital.city)
-    hospital.street_type = data.get('street_type', hospital.street_type)
-    hospital.street_name = data.get('street_name', hospital.street_name)
-    hospital.house = data.get('house', hospital.house)
-    hospital.building = data.get('building', hospital.building)
-    hospital.address_full = data.get('address_full', hospital.address_full)
-    hospital.latitude = data.get('latitude', hospital.latitude)
-    hospital.longitude = data.get('longitude', hospital.longitude)
-    hospital.license_lu = data.get('license_lu', hospital.license_lu)
-    hospital.hot_beds = data.get('hot_beds', hospital.hot_beds)
-    hospital.quotas_vmp_2025 = data.get('quotas_vmp_2025', hospital.quotas_vmp_2025)
-
-    contact = data.get('contact', {})
-    hospital.contact_full_name = contact.get('full_name', hospital.contact_full_name)
-    hospital.contact_position = contact.get('position', hospital.contact_position)
-    hospital.contact_phone = contact.get('phone', hospital.contact_phone)
-    hospital.contact_email = contact.get('email', hospital.contact_email)
-
-    if 'image' in data:
-        hospital.image_filename = data.get('image', hospital.image_filename)
-
-    db.session.commit()
-    return jsonify({'status': 'success'})
-
-if __name__ == '__main__':
-    app.run(debug=True)
+</script>
+{% endblock %}
